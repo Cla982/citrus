@@ -3,7 +3,6 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 from PIL import Image
-from scipy.ndimage import binary_closing, binary_opening, label
 import shutil
 from skimage import io
 
@@ -47,31 +46,9 @@ convert_and_resize_images(src_folder_path, jpg_folder)
 print("Conversione in JPG completata!")
 
 # Funzione per applicare il limite di Otsu alle immagini
-def process_image(file_path, output_path):
-    image = Image.open(file_path).convert('L')
-    img_array = np.array(image)
-
-    # Applicare il limite di Otsu
-    _, otsu_thresholded = cv2.threshold(img_array, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    
-    final_image = Image.fromarray(otsu_thresholded.astype(np.uint8))
-    final_image.save(output_path)
-
-def process_folder(folder_path, output_folder):
-    for root, dirs, files in os.walk(folder_path):
-        for file in files:
-            if file.endswith('.png') or file.endswith('.jpg') or file.endswith('.jpeg'):
-                file_path = os.path.join(root, file)
-                relative_path = os.path.relpath(root, folder_path)
-                output_directory = os.path.join(output_folder, relative_path)
-                if not os.path.exists(output_directory):
-                    os.makedirs(output_directory)
-                output_path = os.path.join(output_directory, file)
-                process_image(file_path, output_path)
-
-# Processa le immagini nella cartella jpg e salva in Otsu
-process_folder(jpg_folder, otsu_folder)
-print("Limite di Otsu applicato!")
+def apply_otsu_threshold(image):
+    _, otsu_thresholded = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return otsu_thresholded
 
 # Funzione per caricare e ordinare le immagini
 def load_images_from_folder(folder):
@@ -116,8 +93,8 @@ def process_folders(input_root, output_root):
                 for i, section in enumerate(vertical_sections):
                     cv2.imwrite(os.path.join(output_folder, f'vertical_section_{i*5}deg.jpg'), section)
 
-# Processa le cartelle in Otsu e salva in VerticalSections
-process_folders(otsu_folder, vertical_sections_folder)
+# Processa le cartelle in jpg e salva in VerticalSections
+process_folders(jpg_folder, vertical_sections_folder)
 print("Sezione verticale eseguita!")
 
 # Funzione per rimuovere righe di rumore
@@ -152,7 +129,25 @@ def blackout_central_columns(image, center_column=128, column_width=25):
     image[:, start_col:end_col] = 0
     return image
 
+def remove_vertical_lines(image, white_threshold=200, min_length=10):
+    height, width = image.shape
+    for x in range(width):
+        col = image[:, x]
+        if np.all(col > white_threshold):
+            start_y = None
+            for y in range(height):
+                if col[y] <= white_threshold:
+                    if start_y is not None and (y - start_y) >= min_length:
+                        image[start_y:y, x] = 0
+                    start_y = None
+                elif start_y is None:
+                    start_y = y
+    return image
+
 def process_image(image):
+    # Applica il limite di Otsu
+    image = apply_otsu_threshold(image)
+
     height, width = image.shape
     center_y = height // 2
 
@@ -175,6 +170,9 @@ def process_image(image):
 
     # Remove noise lines
     image = remove_noise_lines(image)
+
+    # Remove vertical lines
+    image = remove_vertical_lines(image)
 
     # Calculate the bounding box of the fruit
     contours, _ = cv2.findContours((image > black_threshold).astype(np.uint8) * 255, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
