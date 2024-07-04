@@ -1,8 +1,8 @@
 
 # Istruzioni per l'Uso del Script di Preprocessing
 
-Inserire le cartelle con le immagini in una cartella "tiff" e inserire alla riga 11 del file .py il path.
-
+1. Creare una cartella chiamata `tiff` e inserire tutte le cartelle con le immagini TIFF in essa.
+2. Modificare il percorso nella riga 11 del file `PrePro_script.py` per puntare alla cartella `tiff`.
 
 ```python
 # Modificare questa linea nel file PrePro_script.py
