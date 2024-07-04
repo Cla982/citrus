@@ -46,22 +46,15 @@ def convert_and_resize_images(src_folder, dest_folder, size=(256, 256)):
 convert_and_resize_images(src_folder_path, jpg_folder)
 print("Conversione in JPG completata!")
 
-# Funzione per processare le immagini nella cartella jpg
+# Funzione per applicare il limite di Otsu alle immagini
 def process_image(file_path, output_path):
     image = Image.open(file_path).convert('L')
     img_array = np.array(image)
-    threshold_value = 128
-    spot_mask = img_array > threshold_value
-    closed_spots = binary_closing(spot_mask, structure=np.ones((3, 3)))
-    opened_spots = binary_opening(closed_spots, structure=np.ones((3, 3)))
-    labeled_array, num_features = label(opened_spots)
-    if num_features > 0:
-        largest_label = np.argmax(np.bincount(labeled_array.flat)[1:]) + 1
-        final_mask = labeled_array == largest_label
-        final_img_array = np.where(final_mask, img_array, 0)
-    else:
-        final_img_array = np.where(opened_spots, img_array, 0)
-    final_image = Image.fromarray(final_img_array.astype(np.uint8))
+
+    # Applicare il limite di Otsu
+    _, otsu_thresholded = cv2.threshold(img_array, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    final_image = Image.fromarray(otsu_thresholded.astype(np.uint8))
     final_image.save(output_path)
 
 def process_folder(folder_path, output_folder):
@@ -242,3 +235,6 @@ intermediate_dirs = [jpg_folder, vertical_sections_folder, otsu_folder]
 for dir_path in intermediate_dirs:
     if os.path.exists(dir_path):
         shutil.rmtree(dir_path)
+        print(f"Removed directory: {dir_path}")
+
+print("Cartelle intermedie rimosse!")
