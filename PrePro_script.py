@@ -3,20 +3,28 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 from PIL import Image
-from scipy.ndimage import binary_closing, binary_opening, label
-import shutil
 from skimage import io
+import shutil
 
 # Configura il percorso base
-base_path = "L:\\Tiff"  # Cambia questo percorso secondo le necessità
+base_path = "E:\\Tiff"  # Cambia questo percorso secondo le necessità
+output_base_path = os.path.dirname(base_path)
+processed_images_folder = os.path.join(output_base_path, 'Processed_Im')
 
 # Percorso della cartella di origine
 src_folder_path = base_path
 
-# Percorso delle cartelle di output
+# Percorso delle cartelle di output temporanee
 jpg_folder = os.path.join(base_path, 'jpg')
 vertical_sections_folder = os.path.join(base_path, 'VerticalSections')
 otsu_folder = os.path.join(base_path, 'Otsu')
+
+# Percorso della cartella di output finale
+final_output_folder = processed_images_folder
+
+# Assicurati che le cartelle di output esistano
+if not os.path.exists(final_output_folder):
+    os.makedirs(final_output_folder)
 
 # Funzione per convertire e ridimensionare le immagini
 def convert_and_resize_images(src_folder, dest_folder, size=(256, 256)):
@@ -75,23 +83,23 @@ print("Limite di Otsu applicato!")
 
 # Funzione per caricare e ordinare le immagini
 def load_images_from_folder(folder):
+    image_files = sorted([os.path.join(dp, f) for dp, dn, filenames in os.walk(folder) for f in filenames if f.endswith('.jpg') or f.endswith('.png')],
+                         key=lambda x: int(''.join(filter(str.isdigit, os.path.basename(x)))))
+    images = [cv2.imread(file, cv2.IMREAD_GRAYSCALE) for file in image_files]
+    subfolders = [os.path.relpath(os.path.dirname(file), folder) for file in image_files]
+    return image_files, images, subfolders
+
+def load_images(folder):
     images = []
-    filenames = sorted(os.listdir(folder))
-    for filename in filenames:
-        img = cv2.imread(os.path.join(folder, filename), cv2.IMREAD_GRAYSCALE)
-        if img is not None:
-            images.append(img)
+    for root, dirs, files in os.walk(folder):
+        for file in files:
+            if file.endswith('.jpg') or file.endswith('.png'):
+                img = cv2.imread(os.path.join(root, file), cv2.IMREAD_GRAYSCALE)
+                if img is not None:
+                    images.append(img)
     return images
 
-def rotate_image(image, angle=-90):
-    image_center = tuple(np.array(image.shape[1::-1]) / 2)
-    rot_mat = cv2.getRotationMatrix2D(image_center, angle, 1.0)
-    result = cv2.warpAffine(image, rot_mat, image.shape[1::-1], flags=cv2.INTER_LINEAR)
-    return result
-
-def correct_rotation(image):
-    return rotate_image(image, 270)
-
+# Funzione per creare sezioni verticali
 def create_vertical_sections(images, num_sections=72):
     sections = []
     for i in range(num_sections):
@@ -103,6 +111,17 @@ def create_vertical_sections(images, num_sections=72):
         sections.append(corrected_section)
     return sections
 
+# Funzione per ruotare le immagini
+def rotate_image(image, angle=-90):
+    image_center = tuple(np.array(image.shape[1::-1]) / 2)
+    rot_mat = cv2.getRotationMatrix2D(image_center, angle, 1.0)
+    result = cv2.warpAffine(image, rot_mat, image.shape[1::-1], flags=cv2.INTER_LINEAR)
+    return result
+
+def correct_rotation(image):
+    return rotate_image(image, 270)
+
+# Processa le cartelle in Otsu e salva in VerticalSections
 def process_folders(input_root, output_root):
     for subdir, dirs, files in os.walk(input_root):
         if files:
@@ -110,41 +129,60 @@ def process_folders(input_root, output_root):
             output_folder = os.path.join(output_root, os.path.relpath(subdir, input_root))
             if not os.path.exists(output_folder):
                 os.makedirs(output_folder)
-            images = load_images_from_folder(input_folder)
+            images = load_images(input_folder)
             if images:
                 vertical_sections = create_vertical_sections(images)
                 for i, section in enumerate(vertical_sections):
                     cv2.imwrite(os.path.join(output_folder, f'vertical_section_{i*5}deg.jpg'), section)
 
-# Processa le cartelle in Otsu e salva in VerticalSections
 process_folders(otsu_folder, vertical_sections_folder)
 print("Sezione verticale eseguita!")
 
-# Funzione per rimuovere righe di rumore
-def remove_noise_lines(image, threshold=50, white_threshold=200):
+# Funzione per rimuovere righe di rumore nero
+def remove_black_noise_lines(image, black_threshold=20):
     height, width = image.shape
-    black_threshold = 50  # Aggiungiamo un threshold per i pixel neri
+    center_y = height // 2
 
-    for y in range(height):
-        row = image[y, :]
-        left = np.argmax(row > white_threshold)
-        right = width - np.argmax(np.flipud(row) > white_threshold)
-        fruit_width = right - left
+    for y in range(center_y, -1, -1):
+        if np.sum(image[y, :] < black_threshold) > 200:
+            image[:y, :] = 0
+            break
 
-        if y > 0:
-            prev_row = image[y-1, :]
-            prev_left = np.argmax(prev_row > white_threshold)
-            prev_right = width - np.argmax(np.flipud(prev_row) > white_threshold)
-            prev_fruit_width = prev_right - prev_left
-
-            if abs(fruit_width - prev_fruit_width) > threshold:
-                # Identificare il rumore solo all'esterno del frutto
-                for x in range(width):
-                    if (x < left or x > right) and ((y > 0 and image[y-1, x] < black_threshold) or (y < height-1 and image[y+1, x] < black_threshold)):
-                        image[y, x] = 0
+    for y in range(center_y, height):
+        if np.sum(image[y, :] < black_threshold) > 200:
+            image[y:, :] = 0
+            break
 
     return image
 
+# Funzione per calcolare e ridimensionare la bounding box del frutto
+def calculate_and_resize_bounding_box(image):
+    height, width = image.shape
+    black_threshold = 50
+
+    contours, _ = cv2.findContours((image > black_threshold).astype(np.uint8) * 255, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if len(contours) == 0:
+        return image
+
+    largest_contour = max(contours, key=cv2.contourArea)
+    x, y, w, h = cv2.boundingRect(largest_contour)
+
+    fruit = image[y:y+h, x:x+w]
+    scale_factor = min(width / w, height / h)
+    new_w = int(w * scale_factor)
+    new_h = int(h * scale_factor)
+
+    fruit_resized = cv2.resize(fruit, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    centered_image = np.zeros_like(image)
+    start_x = (width - new_w) // 2
+    start_y = (height - new_h) // 2
+    centered_image[start_y:start_y+new_h, start_x:start_x+new_w] = fruit_resized
+
+    return centered_image
+
+# Funzione per oscurare le colonne centrali dell'immagine
 def blackout_central_columns(image, center_column=128, column_width=25):
     height, width = image.shape
     start_col = center_column - column_width
@@ -152,85 +190,43 @@ def blackout_central_columns(image, center_column=128, column_width=25):
     image[:, start_col:end_col] = 0
     return image
 
-def process_image(image):
-    height, width = image.shape
-    center_y = height // 2
+# Funzione per processare le immagini
+def process_image(image, output_folder, filename, subfolder):
+    # Step 1: Remove black noise lines
+    black_noise_removed_image = remove_black_noise_lines(image)
 
-    # Define threshold for considering a pixel as black
-    black_threshold = 20
+    # Step 2: Calculate and resize bounding box
+    bounding_box_image = calculate_and_resize_bounding_box(black_noise_removed_image)
 
-    # Scroll upwards from the center and black out above the first row with more than 200 black pixels
-    for y in range(center_y, -1, -1):
-        black_pixel_count = np.sum(image[y, :] < black_threshold)
-        if black_pixel_count > 200:
-            image[:y, :] = 0
-            break
-    
-    # Scroll downwards from the center and black out below the first row with more than 200 black pixels
-    for y in range(center_y, height):
-        black_pixel_count = np.sum(image[y, :] < black_threshold)
-        if black_pixel_count > 200:
-            image[y:, :] = 0
-            break
+    # Step 3: Blackout central columns
+    final_image = blackout_central_columns(bounding_box_image)
 
-    # Remove noise lines
-    image = remove_noise_lines(image)
-
-    # Calculate the bounding box of the fruit
-    contours, _ = cv2.findContours((image > black_threshold).astype(np.uint8) * 255, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    if len(contours) == 0:
-        return image
-
-    largest_contour = max(contours, key=cv2.contourArea)
-    x, y, w, h = cv2.boundingRect(largest_contour)
-
-    # Extract the fruit and calculate the scaling factor
-    fruit = image[y:y+h, x:x+w]
-    scale_factor = min(width / w, height / h)
-    new_w = int(w * scale_factor)
-    new_h = int(h * scale_factor)
-
-    # Resize the fruit while maintaining the aspect ratio
-    fruit_resized = cv2.resize(fruit, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-    # Create a new black image and place the resized fruit at the center
-    centered_image = np.zeros_like(image)
-    start_x = (width - new_w) // 2
-    start_y = (height - new_h) // 2
-    centered_image[start_y:start_y+new_h, start_x:start_x+new_w] = fruit_resized
-    
-    # Blackout central columns
-    centered_image = blackout_central_columns(centered_image)
-
-    return centered_image
+    # Save final image
+    output_path = os.path.join(output_folder, subfolder)
+    os.makedirs(output_path, exist_ok=True)
+    cv2.imwrite(os.path.join(output_path, filename), final_image)
 
 def load_and_sort_images(folder_path):
     image_files = sorted([os.path.join(dp, f) for dp, dn, filenames in os.walk(folder_path) for f in filenames if f.endswith('.jpg') or f.endswith('.png')],
                          key=lambda x: int(''.join(filter(str.isdigit, os.path.basename(x)))))
     images = [cv2.imread(file, cv2.IMREAD_GRAYSCALE) for file in image_files]
-    return image_files, images
+    subfolders = [os.path.relpath(os.path.dirname(file), folder_path) for file in image_files]
+    return image_files, images, subfolders
 
 def process_images(input_folder, output_folder):
-    image_files, images = load_and_sort_images(input_folder)
+    image_files, images, subfolders = load_and_sort_images(input_folder)
     
     for idx, img_path in enumerate(image_files):
-        relative_path = os.path.relpath(img_path, input_folder)
-        output_path = os.path.join(output_folder, relative_path)
-
-        # Create output directory if it doesn't exist
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-        processed_img = process_image(images[idx])
-        io.imsave(output_path, processed_img)
+        filename = os.path.basename(img_path)
+        process_image(images[idx], output_folder, filename, subfolders[idx])
 
 input_folder = vertical_sections_folder
-output_folder = os.path.join(base_path, 'Processed_Images')
+output_folder = final_output_folder
 process_images(input_folder, output_folder)
 print("Immagini pronte!")
 
-# Rimuovi le cartelle intermedie
-intermediate_dirs = [jpg_folder, vertical_sections_folder, otsu_folder]
+# Rimuovi le cartelle intermedie tranne 'jpg'
+intermediate_dirs = [vertical_sections_folder, otsu_folder]
 
 for dir_path in intermediate_dirs:
     if os.path.exists(dir_path):
